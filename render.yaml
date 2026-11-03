@@ -1,0 +1,23 @@
+# Render.com blueprint (free plan).
+# Push this folder to GitHub, then in Render: New + > Blueprint > pick the repo.
+services:
+  - type: web
+    name: yt-downloader
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # 512 MB RAM on the free plan -> one job at a time.
+      - key: MAX_CONCURRENT
+        value: "1"
+      # Keep finished files as long as possible (slow connections).
+      # 0 = no age limit; the 20 GB cap protects the disk.
+      - key: FILE_TTL
+        value: "0"
+      - key: MAX_STORAGE_MB
+        value: "8000"
+      # Optional: paste a base64 Netscape cookies.txt to avoid YouTube bot checks.
+      - key: COOKIES_B64
+        sync: false
