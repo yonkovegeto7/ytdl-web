@@ -1,0 +1,6 @@
+# Core dependencies for the web edition.
+# yt-dlp is unpinned on purpose: YouTube changes constantly and every release
+# contains fixes. Rebuild the image regularly to pick them up.
+Flask>=3.0,<4.0
+yt-dlp[default]>=2025.1.15
+gunicorn>=22.0
