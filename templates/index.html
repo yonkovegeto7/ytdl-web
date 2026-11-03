@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0f0f1a">
+<title data-i18n="page_title">YouTube Downloader — Download Videos Fast</title>
+<meta name="description" content="Download YouTube videos as MP4. Fast, free and works on every device.">
+<link rel="preconnect" href="https://i.ytimg.com">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬇️</text></svg>">
+
+<!-- Adsterra popunder.
+     MUST be a real script tag in the page head: the script hooks the very first
+     click on the page, so if it is injected by JavaScript later (which is what
+     the app used to do) it misses that click and never opens anything. -->
+<script async="async" data-cfasync="false"
+        src="https://pl17279396.profitableratecpmnetwork.com/fa/cd/7d/facd7d024aaaf4b84e319af1e7e040db.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="container header-inner">
+    <div>
+      <h1 data-i18n="app_title">YouTube Downloader</h1>
+      <p data-i18n="app_subtitle">Download any YouTube video as MP4 — fast and free</p>
+    </div>
+    <div class="lang-switch" role="group" aria-label="Language">
+      <button type="button" data-lang="en">EN</button>
+      <button type="button" data-lang="ar">ع</button>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  {% if not ffmpeg_ok %}
+  <div class="alert alert-error" data-i18n="warn_ffmpeg">
+    FFmpeg is not installed on this server, downloads will not work.
+  </div>
+  {% endif %}
+
+  {% if not js_ok %}
+  <div class="alert alert-warn" data-i18n="warn_js">
+    No JavaScript runtime (Deno/Node) found. Some YouTube formats may not be available.
+  </div>
+  {% endif %}
+
+  <!-- ============ Step 1 ============ -->
+  <section class="card">
+    <h2><span class="step">1</span><span data-i18n="step_url">Paste a YouTube link</span></h2>
+
+    <div class="field">
+      <input id="url-input" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+             data-i18n-ph="url_placeholder" placeholder="https://www.youtube.com/watch?v=..." />
+    </div>
+
+    <div class="field">
+      <label for="filename-input" data-i18n="filename_label">File name (optional)</label>
+      <input id="filename-input" type="text" autocomplete="off"
+             data-i18n-ph="filename_placeholder" placeholder="Leave empty for the video title" />
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="fetch-btn" type="button" data-i18n="fetch_btn">Get formats</button>
+      <span class="hint" data-i18n="fetch_hint">Works with videos, Shorts and YouTube Music.</span>
+    </div>
+
+    <div id="error-box" class="alert alert-error hidden" role="alert"></div>
+  </section>
+
+  <!-- ============ Step 2 ============ -->
+  <section class="card hidden" id="formats-card">
+    <div class="video-head">
+      <img id="thumb" class="thumb hidden" alt="" loading="lazy" referrerpolicy="no-referrer">
+      <div class="video-meta">
+        <strong id="video-title"></strong>
+        <span id="video-sub" class="muted"></span>
+      </div>
+    </div>
+
+    <h2><span class="step">2</span><span data-i18n="step_video">Video quality</span></h2>
+    <div class="format-list" id="video-list" role="radiogroup"></div>
+
+    <h2><span class="step">3</span><span data-i18n="step_audio">Audio quality</span></h2>
+    <div class="format-list" id="audio-list" role="radiogroup"></div>
+
+    <h2><span class="step">4</span><span data-i18n="step_trim">Trim (optional)</span></h2>
+    <div class="grid-2">
+      <div class="field">
+        <label for="start-time" data-i18n="start_label">Start time (HH:MM:SS)</label>
+        <input id="start-time" type="text" placeholder="00:01:30" inputmode="numeric" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="end-time" data-i18n="end_label">End time (HH:MM:SS)</label>
+        <input id="end-time" type="text" placeholder="00:04:15" inputmode="numeric" autocomplete="off">
+      </div>
+    </div>
+    <p class="hint" id="duration-line"></p>
+
+    <div class="actions actions-wrap">
+      <button class="btn btn-success" id="full-btn" type="button" data-i18n="download_full">
+        Download full video
+      </button>
+      <button class="btn btn-accent" id="trim-btn" type="button" data-i18n="download_trim">
+        Cut &amp; download
+      </button>
+      <button class="btn btn-ghost" id="chapters-btn" type="button" data-i18n="download_chapters" hidden>
+        Chapters
+      </button>
+    </div>
+  </section>
+
+  <!-- ============ Chapters ============ -->
+  <section class="card hidden" id="chapters-card">
+    <h2 data-i18n="chapters_title">Pick chapters</h2>
+    <div class="format-list tall" id="chapters-list"></div>
+    <div class="actions">
+      <button class="btn btn-primary" id="chapters-dl-btn" type="button" data-i18n="download_selected">
+        Download selected (zip)
+      </button>
+      <button class="btn btn-ghost" type="button" onclick="showFormats()" data-i18n="back">Back</button>
+    </div>
+  </section>
+
+  <!-- ============ Progress ============ -->
+  <section class="card hidden" id="progress-card">
+    <h2 data-i18n="progress_title">Progress</h2>
+
+    <div class="progress-wrap">
+      <div class="progress-bar" id="progress-bar"></div>
+      <div class="progress-text" id="progress-text">0%</div>
+    </div>
+
+    <div class="status-row">
+      <span id="status-text"></span>
+      <span id="dl-info" class="muted"></span>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-ghost btn-sm" id="console-toggle" type="button" data-i18n="show_console">
+        Show console
+      </button>
+      <button class="btn btn-danger btn-sm" id="stop-btn" type="button" data-i18n="stop">Stop</button>
+    </div>
+
+    <pre class="log-box hidden" id="log-box"></pre>
+
+    <div class="actions" id="download-actions"></div>
+  </section>
+
+  <!-- ============ Ads ============ -->
+  <div class="ad-wrap">
+    <span class="ad-label" data-i18n="ad_label">إعلان</span>
+
+    <!-- 728x90 banner (auto-scaled to the screen width) -->
+    <div class="ad-banner" id="ad-banner">
+      <div class="ad-banner-inner" id="ad-banner-inner"></div>
+    </div>
+
+    <!-- native unit -->
+    <div class="ad-native" id="container-218b09d4a2a0ad568ab84cd2387c2ddd"></div>
+  </div>
+
+  <footer>
+    <p data-i18n="footer_note">Not affiliated with YouTube. Download only content you have the right to use.</p>
+    <p class="muted small" id="ttl-note"></p>
+    <p class="small">
+      <a href="#" id="sponsored-link" class="sponsored" rel="sponsored noopener" target="_blank"
+         data-i18n="sponsored">إعلان ممول</a>
+    </p>
+  </footer>
+</main>
+
+<script>
+  window.APP_CONFIG = { ttlMinutes: {{ ttl_minutes }}, storageGb: {{ storage_gb }} };
+</script>
+<script src="{{ url_for('static', filename='i18n.js') }}"></script>
+<script src="{{ url_for('static', filename='ads.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
