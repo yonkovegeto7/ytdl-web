@@ -427,7 +427,13 @@ async function pollStatus() {
 
   $("progress-bar").style.width = data.progress + "%";
   $("progress-text").textContent = data.progress + "%";
-  $("status-text").textContent = statusLabel(data.status);
+  if (data.status === "queued" && data.queue_position) {
+    $("status-text").textContent = t("status_in_queue")
+      .replace("{n}", data.queue_position)
+      .replace("{total}", data.queue_total);
+  } else {
+    $("status-text").textContent = statusLabel(data.status);
+  }
   state.lastStatus = data.status;
 
   const info = [];
