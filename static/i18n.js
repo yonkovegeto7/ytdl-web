@@ -60,6 +60,7 @@ const I18N = {
     server_error: "Something went wrong. Please try again.",
 
     status_queued: "Queued…",
+    status_in_queue: "In queue — you are #{n} of {total}…",
     status_downloading_video: "Downloading video…",
     status_downloading_audio: "Downloading audio…",
     status_merging: "Merging…",
@@ -131,6 +132,7 @@ const I18N = {
     server_error: "حصل خطأ. جرب تاني.",
 
     status_queued: "في الانتظار…",
+    status_in_queue: "أنت في الطابور — رقم {n} من {total}…",
     status_downloading_video: "بيحمّل الفيديو…",
     status_downloading_audio: "بيحمّل الصوت…",
     status_merging: "بيدمج…",
