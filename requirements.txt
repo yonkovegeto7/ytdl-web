@@ -4,3 +4,4 @@
 Flask>=3.0,<4.0
 yt-dlp[default]>=2025.1.15
 gunicorn>=22.0
+waitress>=3.0
