@@ -133,6 +133,41 @@ TASKS = {}
 TASKS_LOCK = threading.Lock()
 SLOTS = threading.Semaphore(MAX_CONCURRENT)
 
+# Waiting line. Jobs never get rejected when the server is busy: they wait for
+# a free slot and the page shows their position. FIFO order, so nobody jumps in.
+MAX_QUEUE = max(0, _int_env("MAX_QUEUE", 300))
+QUEUE = []
+QUEUE_LOCK = threading.Lock()
+
+
+def queue_join(task_id):
+    with QUEUE_LOCK:
+        if MAX_QUEUE and len(QUEUE) >= MAX_QUEUE:
+            return False
+        QUEUE.append(task_id)
+        return True
+
+
+def queue_leave(task_id):
+    with QUEUE_LOCK:
+        try:
+            QUEUE.remove(task_id)
+        except ValueError:
+            pass
+
+
+def queue_position(task_id):
+    with QUEUE_LOCK:
+        try:
+            return QUEUE.index(task_id) + 1
+        except ValueError:
+            return 0
+
+
+def queue_size():
+    with QUEUE_LOCK:
+        return len(QUEUE)
+
 ALLOWED_HOSTS = {
     "youtube.com",
     "www.youtube.com",
@@ -368,6 +403,8 @@ def new_task():
             "eta": 0,
             "output_file": None,
             "output_filename": None,
+            "queued_at": time.time(),
+            "started_at": None,
         }
     return TASKS[task_id]
 
@@ -639,8 +676,27 @@ def job_chapters(task, url, video_id, chapters, filename):
 
 
 def start_job(task, target, *args, **kwargs):
+    tid = task["id"]
+
+    if not queue_join(tid):
+        task["status"] = "error"
+        task["error"] = "The server queue is full. Please try again in a few minutes."
+        return False
+
     def runner():
+        got_slot = False
         try:
+            # Wait in line for a free worker slot. Visitors are never rejected
+            # because the server is busy - they just see their queue position.
+            while not task.get("stopped"):
+                if SLOTS.acquire(timeout=1.0):
+                    got_slot = True
+                    break
+            queue_leave(tid)
+            if not got_slot:
+                task["status"] = "stopped"
+                return
+            task["started_at"] = time.time()
             target(task, *args, **kwargs)
         except Exception as exc:
             if task.get("stopped"):
@@ -652,10 +708,13 @@ def start_job(task, target, *args, **kwargs):
                 log(task, "Error: " + friendly_error(exc))
                 log(task, traceback.format_exc()[-600:])
         finally:
+            queue_leave(tid)
             task["finished"] = time.time()
-            SLOTS.release()
+            if got_slot:
+                SLOTS.release()
 
     threading.Thread(target=runner, daemon=True).start()
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -983,23 +1042,20 @@ def api_download():
         return jsonify({"error": "Server is missing ffmpeg."}), 500
     if free_disk_mb() < 700:
         return jsonify({"error": "Server storage is full. Try again later."}), 503
-    if not SLOTS.acquire(blocking=False):
-        return jsonify({"error": "Server is busy. Please try again in a moment."}), 429
+    if MAX_QUEUE and queue_size() >= MAX_QUEUE:
+        return jsonify({"error": "The server queue is full. Please try again in a few minutes."}), 429
     if rate_limited(client_ip(), "download", RATE_DOWNLOAD, 3600):
-        SLOTS.release()
         return jsonify({"error": "Too many downloads from your network. Try later."}), 429
 
     data = request.get_json(silent=True) or {}
     try:
         url = normalize_url(data.get("url"))
     except ValueError:
-        SLOTS.release()
         return jsonify({"error": "Please enter a valid YouTube link."}), 400
 
     video_id = str(data.get("video_format_id") or "")
     audio_id = str(data.get("audio_format_id") or "")
     if not FORMAT_RE.match(video_id) or not FORMAT_RE.match(audio_id):
-        SLOTS.release()
         return jsonify({"error": "Please pick a video and an audio format."}), 400
 
     mode = (data.get("mode") or "full").lower()
@@ -1009,16 +1065,13 @@ def api_download():
         start_raw = str(data.get("start_time") or "").strip()
         end_raw = str(data.get("end_time") or "").strip()
         if not TIME_RE.match(start_raw) or not TIME_RE.match(end_raw):
-            SLOTS.release()
             return jsonify({"error": "Use HH:MM:SS for the start and end time."}), 400
         try:
             start_sec = time_to_seconds(start_raw)
             end_sec = time_to_seconds(end_raw)
         except ValueError:
-            SLOTS.release()
             return jsonify({"error": "Invalid time."}), 400
         if end_sec <= start_sec:
-            SLOTS.release()
             return jsonify({"error": "End time must be after start time."}), 400
         if filename:
             stem = os.path.splitext(sanitize_filename(filename))[0]
@@ -1035,27 +1088,23 @@ def api_chapters():
         return jsonify({"error": "Server is missing ffmpeg."}), 500
     if free_disk_mb() < 700:
         return jsonify({"error": "Server storage is full. Try again later."}), 503
-    if not SLOTS.acquire(blocking=False):
-        return jsonify({"error": "Server is busy. Please try again in a moment."}), 429
+    if MAX_QUEUE and queue_size() >= MAX_QUEUE:
+        return jsonify({"error": "The server queue is full. Please try again in a few minutes."}), 429
 
     data = request.get_json(silent=True) or {}
     try:
         url = normalize_url(data.get("url"))
     except ValueError:
-        SLOTS.release()
         return jsonify({"error": "Please enter a valid YouTube link."}), 400
 
     video_id = str(data.get("video_format_id") or "")
     if not FORMAT_RE.match(video_id):
-        SLOTS.release()
         return jsonify({"error": "Please pick a video format."}), 400
 
     chapters = data.get("chapters") or []
     if not isinstance(chapters, list) or not chapters:
-        SLOTS.release()
         return jsonify({"error": "No chapters selected."}), 400
     if len(chapters) > 50:
-        SLOTS.release()
         return jsonify({"error": "Too many chapters (max 50)."}), 400
 
     clean = []
@@ -1064,10 +1113,8 @@ def api_chapters():
             start = max(0.0, float(ch.get("start_time")))
             end = float(ch.get("end_time"))
         except (TypeError, ValueError):
-            SLOTS.release()
             return jsonify({"error": "Invalid chapter data."}), 400
         if end <= start:
-            SLOTS.release()
             return jsonify({"error": "Invalid chapter range."}), 400
         clean.append(
             {"title": str(ch.get("title") or "Chapter")[:80], "start_time": start, "end_time": end}
@@ -1100,6 +1147,13 @@ def api_status(task_id):
             if task.get("total"):
                 size += " / " + human_size(task["total"])
 
+        can_download = (
+            task["status"] == "complete"
+            and not task.get("expired")
+            and bool(task.get("output_file"))
+        )
+        waiting = task["status"] == "queued"
+        pos = queue_position(task_id) if waiting else 0
         return jsonify(
             {
                 "status": task["status"],
@@ -1110,10 +1164,11 @@ def api_status(task_id):
                 "size": size,
                 "output_filename": task.get("output_filename"),
                 "logs": task.get("logs", [])[-60:],
-                "can_download": task["status"] == "complete"
-                and not task.get("expired")
-                and bool(task.get("output_file")),
+                "can_download": can_download,
                 "expired": bool(task.get("expired")),
+                "queue_position": pos,
+                "queue_ahead": max(0, pos - 1),
+                "queue_total": queue_size(),
             }
         )
 
@@ -1126,6 +1181,7 @@ def api_stop(task_id):
             task["stopped"] = True
             if task["status"] not in ("complete", "error"):
                 task["status"] = "stopped"
+    queue_leave(task_id)
     return jsonify({"ok": True})
 
 
